@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Docker.DotNet;
 
 #if !NET45
 using System.Buffers;
@@ -11,7 +12,7 @@ using System.Buffers;
 
 namespace Microsoft.Net.Http.Client
 {
-    internal class BufferedReadStream : WriteClosableStream
+    internal class BufferedReadStream : WriteClosableStream, IPeekableStream
     {
         private const char CR = '\r';
         private const char LF = '\n';
@@ -19,6 +20,7 @@ namespace Microsoft.Net.Http.Client
         private readonly Stream _inner;
         private readonly Socket _socket;
         private readonly byte[] _buffer;
+        private volatile int _bufferRefCount;
         private int _bufferOffset = 0;
         private int _bufferCount = 0;
         private bool _disposed;
@@ -36,6 +38,7 @@ namespace Microsoft.Net.Http.Client
             _inner = inner;
             _socket = socket;
 #if !NET45
+            _bufferRefCount = 1;
             _buffer = ArrayPool<byte>.Shared.Rent(bufferLength);
 #else
             _buffer = new byte[bufferLength];
@@ -92,7 +95,10 @@ namespace Microsoft.Net.Http.Client
                 {
                     _inner.Dispose();
 #if !NET45
-                    ArrayPool<byte>.Shared.Return(_buffer);
+                    if (Interlocked.Decrement(ref _bufferRefCount) == 0)
+                    {
+                        ArrayPool<byte>.Shared.Return(_buffer);
+                    }
 #endif
                 }
             }
@@ -140,6 +146,22 @@ namespace Microsoft.Net.Http.Client
             return _inner.ReadAsync(buffer, offset, count, cancellationToken);
         }
 
+        public bool Peek(byte[] buffer, uint toPeek, out uint peeked, out uint available, out uint remaining)
+        {
+            int read = PeekBuffer(buffer, toPeek, out peeked, out available, out remaining);
+            if (read > 0)
+            {
+                return true;
+            }
+
+            if (_inner is IPeekableStream peekableStream)
+            {
+                return peekableStream.Peek(buffer, toPeek, out peeked, out available, out remaining);
+            }
+
+            throw new NotSupportedException("_inner stream isn't a peekable stream");
+        }
+
         private int ReadBuffer(byte[] buffer, int offset, int count)
         {
             if (_bufferCount > 0)
@@ -154,12 +176,48 @@ namespace Microsoft.Net.Http.Client
             return 0;
         }
 
+        private int PeekBuffer(byte[] buffer, uint toPeek, out uint peeked, out uint available, out uint remaining)
+        {
+            if (_bufferCount > 0)
+            {
+                int toCopy = Math.Min(_bufferCount, (int)toPeek);
+                Buffer.BlockCopy(_buffer, _bufferOffset, buffer, 0, toCopy);
+                peeked = (uint) toCopy;
+                available = (uint)_bufferCount;
+                remaining = available - peeked;
+                return toCopy;
+            }
+
+            peeked = 0;
+            available = 0;
+            remaining = 0;
+            return 0;
+        }
+
         private async Task EnsureBufferedAsync(CancellationToken cancel)
         {
             if (_bufferCount == 0)
             {
                 _bufferOffset = 0;
+#if !NET45
+                bool validBuffer = Interlocked.Increment(ref _bufferRefCount) > 1;
+                try
+                {
+                    if (validBuffer)
+                    {
+                        _bufferCount = await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    if ((Interlocked.Decrement(ref _bufferRefCount) == 0) && validBuffer)
+                    {
+                        ArrayPool<byte>.Shared.Return(_buffer);
+                    }
+                }
+#else
                 _bufferCount = await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel).ConfigureAwait(false);
+#endif
                 if (_bufferCount == 0)
                 {
                     throw new IOException("Unexpected end of stream");

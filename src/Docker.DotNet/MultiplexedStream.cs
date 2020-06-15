@@ -11,9 +11,9 @@ using System.Buffers;
 
 namespace Docker.DotNet
 {
-    public class MultiplexedStream : IDisposable
+    public class MultiplexedStream : IDisposable, IPeekableStream
     {
-        private readonly WriteClosableStream _stream;
+        private readonly Stream _stream;
         private TargetStream _target;
         private int _remaining;
         private readonly byte[] _header = new byte[8];
@@ -21,7 +21,7 @@ namespace Docker.DotNet
 
         const int BufferSize = 81920;
 
-        public MultiplexedStream(WriteClosableStream stream, bool multiplexed)
+        public MultiplexedStream(Stream stream, bool multiplexed)
         {
             _stream = stream;
             _multiplexed = multiplexed;
@@ -43,12 +43,25 @@ namespace Docker.DotNet
 
         public void CloseWrite()
         {
-            _stream.CloseWrite();
+            if (_stream is WriteClosableStream closable)
+            {
+                closable.CloseWrite();
+            }
         }
 
         public Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             return _stream.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public bool Peek(byte[] buffer, uint toPeek, out uint peeked, out uint available, out uint remaining)
+        {
+            if (_stream is IPeekableStream peekableStream)
+            {
+                return peekableStream.Peek(buffer, toPeek, out peeked, out available, out remaining);
+            }
+
+            throw new NotSupportedException("_stream isn't a peekable stream");
         }
 
         public async Task<ReadResult> ReadOutputAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)

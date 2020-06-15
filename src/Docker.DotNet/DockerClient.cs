@@ -43,6 +43,7 @@ namespace Docker.DotNet
             Tasks = new TasksOperations(this);
             Volumes = new VolumeOperations(this);
             Plugin = new PluginOperations(this);
+            Exec = new ExecOperations(this);
 
             ManagedHandler handler;
             var uri = Configuration.EndpointBaseUri;
@@ -72,10 +73,8 @@ namespace Docker.DotNet
                     uri = new UriBuilder("http", pipeName).Uri;
                     handler = new ManagedHandler(async (host, port, cancellationToken) =>
                     {
-                        // NamedPipeClientStream handles file not found by polling until the server arrives. Use a short
-                        // timeout so that the user doesn't get stuck waiting for a dockerd instance that is not running.
-                        var timeout = 100; // 100ms
-                        var stream = new NamedPipeClientStream(serverName, pipeName);
+                        int timeout = (int)this.Configuration.NamedPipeConnectTimeout.TotalMilliseconds;
+                        var stream = new NamedPipeClientStream(serverName, pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
                         var dockerStream = new DockerPipeStream(stream);
 
 #if NET45
@@ -147,6 +146,8 @@ namespace Docker.DotNet
         public ISystemOperations System { get; }
 
         public IPluginOperations Plugin { get; }
+
+        public IExecOperations Exec { get; }
 
         internal JsonSerializer JsonSerializer { get; }
 
@@ -272,6 +273,18 @@ namespace Docker.DotNet
             return await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
         }
 
+        internal async Task<HttpResponseMessage> MakeRequestForRawResponseAsync(
+            HttpMethod method,
+            string path,
+            IQueryString queryString,
+            IRequestContent body,
+            IDictionary<string, string> headers,
+            CancellationToken token)
+        {
+            var response = await PrivateMakeRequestAsync(s_InfiniteTimeout, HttpCompletionOption.ResponseHeadersRead, method, path, queryString, headers, body, token).ConfigureAwait(false);
+            return response;
+        }
+
         internal async Task<DockerApiStreamedResponse> MakeRequestForStreamedResponseAsync(
             IEnumerable<ApiResponseErrorHandlingDelegate> errorHandlers,
             HttpMethod method,
@@ -381,16 +394,37 @@ namespace Docker.DotNet
             }
         }
 
+        public async Task HandleIfErrorResponseAsync(HttpStatusCode statusCode, HttpResponseMessage response)
+        {
+            bool isErrorResponse = statusCode < HttpStatusCode.OK || statusCode >= HttpStatusCode.BadRequest;
+
+            string responseBody = null;
+
+            if (isErrorResponse)
+            {
+                // If it is not an error response, we do not read the response body because the caller may wish to consume it.
+                // If it is an error response, we do because there is nothing else going to be done with it anyway and
+                // we want to report the response body in the error message as it contains potentially useful info.
+                responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }
+
+            // No custom handler was fired. Default the response for generic success/failures.
+            if (isErrorResponse)
+            {
+                throw new DockerApiException(statusCode, responseBody);
+            }
+        }
+
         internal HttpRequestMessage PrepareRequest(HttpMethod method, string path, IQueryString queryString, IDictionary<string, string> headers, IRequestContent data)
         {
-            if (string.IsNullOrEmpty("path"))
+            if (string.IsNullOrEmpty(path))
             {
                 throw new ArgumentNullException(nameof(path));
             }
 
             var request = new HttpRequestMessage(method, HttpUtility.BuildUri(_endpointBaseUri, this._requestedApiVersion, path, queryString));
 
-            request.Version = new Version(1, 11);
+            request.Version = new Version(1, 1);
 
             request.Headers.Add("User-Agent", UserAgent);
 

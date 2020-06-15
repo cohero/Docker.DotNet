@@ -95,10 +95,34 @@ namespace Docker.DotNet
         /// 500 - Server error.
         /// </remarks>
         /// <param name="id">ID or name of the container.</param>
-        [Obsolete("Use 'Task GetContainerLogsAsync(string id, ContainerLogsParameters parameters, CancellationToken cancellationToken, IProgress<string> progress)'")]
+        [Obsolete("The stream returned by this method won't be demultiplexed properly if the container was created without a TTY. Use GetContainerLogsAsync(string, bool, ContainerLogsParameters, CancellationToken) instead")]
         Task<Stream> GetContainerLogsAsync(string id, ContainerLogsParameters parameters, CancellationToken cancellationToken = default(CancellationToken));
 
+        /// <summary>
+        /// Gets the logs from a container.
+        /// This method is only suited for containers created with a TTY. For containers created without a TTY, use
+        /// <see cref="GetContainerLogsAsync(string, bool, ContainerLogsParameters, CancellationToken)"/> instead.
+        /// </summary>
+        /// <param name="id">ID or name of the container.</param>
+        /// <param name="parameters">The parameters used to retrieve the logs.</param>
+        /// <param name="cancellationToken">A token used to cancel this operation.</param>
+        /// <param name="progress">
+        /// The class that will receive the log lines.
+        /// Every reported string represents one log line, with its terminating newline removed.
+        /// </param>
+        /// <returns>A Task that will complete once all log lines have been read, or once the container has exited if Follow is set to <see langword="true"/>.</returns>
         Task GetContainerLogsAsync(string id, ContainerLogsParameters parameters, CancellationToken cancellationToken, IProgress<string> progress);
+
+        /// <summary>
+        /// Gets the <code>stdout</code> and <code>stderr</code> logs from a container.
+        /// This endpoint works only for containers with the <code>json-file</code> or <code>journald</code> logging driver.
+        /// </summary>
+        /// <param name="id">ID or name of the container.</param>
+        /// <param name="tty">If the container was created with a TTY or not. If <see langword="false" />, the returned stream is multiplexed.</param>
+        /// <param name="parameters">The parameters used to retrieve the logs.</param>
+        /// <param name="cancellationToken">A token used to cancel this operation.</param>
+        /// <returns>A stream with the retrieved logs. If the container wasn't created with a TTY, this stream is multiplexed.</returns>
+        Task<MultiplexedStream> GetContainerLogsAsync(string id, bool tty, ContainerLogsParameters parameters, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// Get changes on a container's filesystem.
@@ -398,73 +422,6 @@ namespace Docker.DotNet
         /// 500 - Server error.
         /// </remarks>
         Task<ContainersPruneResponse> PruneContainersAsync(ContainersPruneParameters parameters = null, CancellationToken cancellationToken = default(CancellationToken));
-
-        //
-        // TODO: Move to IExecOperations.cs
-        //
-
-        /// <summary>
-        /// Create an exec instance.
-        ///
-        /// Runs a command inside a running container.
-        /// </summary>
-        /// <remarks>
-        /// docker exec
-        /// docker container exec
-        ///
-        /// 201 - No error.
-        /// 404 - No such container.
-        /// 409 - Container is paused.
-        /// 500 - Server error.
-        /// </remarks>
-        /// <param name="id">ID or name of the container.</param>
-        Task<ContainerExecCreateResponse> ExecCreateContainerAsync(string id, ContainerExecCreateParameters parameters, CancellationToken cancellationToken = default(CancellationToken));
-
-        /// <summary>
-        /// Start an exec instance.
-        ///
-        /// Starts a previously set up exec instance. If detach is true, this endpoint returns immediately after starting
-        /// the command. Otherwise, it sets up an interactive session with the command.
-        /// </summary>
-        /// <remarks>
-        /// 204 - No error.
-        /// 404 - No such exec instance.
-        /// 500 - Server error.
-        /// </remarks>
-        /// <param name="id">Exec instance ID.</param>
-        Task StartContainerExecAsync(string id, CancellationToken cancellationToken = default(CancellationToken));
-
-        Task<MultiplexedStream> StartAndAttachContainerExecAsync(string id, bool tty, CancellationToken cancellationToken = default(CancellationToken));
-
-        Task<MultiplexedStream> StartWithConfigContainerExecAsync(string id, ContainerExecStartParameters eConfig, CancellationToken cancellationToken = default(CancellationToken));
-
-        /// <summary>
-        /// Resize an exec instance.
-        ///
-        /// Resize the TTY session used by an exec instance. This endpoint only works if {tty} was specified as part of
-        /// creating and starting the exec instance.
-        /// </summary>
-        /// <remarks>
-        /// 201 - No error.
-        /// 404 - No such exec instance.
-        /// </remarks>
-        /// <param name="id">Exec instance ID.</param>
-        Task ResizeContainerExecTtyAsync(string id, ContainerResizeParameters parameters, CancellationToken cancellationToken = default(CancellationToken));
-
-        /// <summary>
-        /// Inspect an exec instance.
-        ///
-        /// Return low-level information about an exec instance.
-        /// </summary>
-        /// <remarks>
-        /// docker inspect
-        ///
-        /// 200 - No error.
-        /// 404 - No such exec instance.
-        /// 500 - Server error.
-        /// </remarks>
-        /// <param name="id">Exec instance ID.</param>
-        Task<ContainerExecInspectResponse> InspectContainerExecAsync(string id, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// Update configuration of a container.
